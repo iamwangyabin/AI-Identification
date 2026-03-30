@@ -102,7 +102,12 @@ def parse_args() -> argparse.Namespace:
         metavar="FROM=TO",
         help="Rewrite prefixes inside manifest paths without editing the manifest files.",
     )
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Device to use: auto, cuda, cuda:0, mps, or cpu.",
+    )
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--use-swanlab", action="store_true")
@@ -122,7 +127,47 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def resolve_device(device_arg: str) -> torch.device:
+    requested = device_arg.lower()
+    mps_backend = getattr(torch.backends, "mps", None)
+    mps_available = mps_backend is not None and mps_backend.is_available()
+
+    if requested == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if mps_available:
+            return torch.device("mps")
+        return torch.device("cpu")
+
+    if requested.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested with --device, but torch.cuda.is_available() is False. "
+            "This usually means the current Python environment does not have a working CUDA-enabled PyTorch build, "
+            "or the process cannot see the NVIDIA driver/GPU."
+        )
+
+    if requested == "mps" and not mps_available:
+        raise RuntimeError(
+            "MPS was requested with --device mps, but torch.backends.mps.is_available() is False."
+        )
+
+    return torch.device(device_arg)
+
+
+def log_device_info(device: torch.device) -> None:
+    print(
+        "Runtime device:"
+        f" requested={device}"
+        f" cuda_available={torch.cuda.is_available()}"
+        f" cuda_device_count={torch.cuda.device_count()}"
+        f" cuda_version={torch.version.cuda}"
+    )
+    if device.type == "cuda":
+        print(f"Using CUDA device {device.index or 0}: {torch.cuda.get_device_name(device)}")
 
 
 def load_class_map(path: Path) -> dict[str, Any]:
@@ -248,6 +293,7 @@ def build_dataloaders(
     args: argparse.Namespace,
     train_transform: Any,
     eval_transform: Any,
+    device: torch.device,
 ) -> tuple[DataLoader, DataLoader]:
     substitutions = build_path_substitutions(args.path_substitution)
     train_dataset = JsonlImageDataset(
@@ -267,7 +313,7 @@ def build_dataloaders(
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=device.type == "cuda",
         persistent_workers=args.workers > 0,
     )
     val_loader = DataLoader(
@@ -275,7 +321,7 @@ def build_dataloaders(
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=device.type == "cuda",
         persistent_workers=args.workers > 0,
     )
     return train_loader, val_loader
@@ -469,7 +515,8 @@ def count_parameters(model: nn.Module) -> tuple[int, int]:
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
-    device = torch.device(args.device)
+    device = resolve_device(args.device)
+    log_device_info(device)
     class_map = load_class_map(args.class_map)
     num_classes = int(class_map["num_classes"])
     logger = init_swanlab_logger(args, num_classes)
@@ -477,7 +524,7 @@ def main() -> None:
     try:
         model = build_model(args, num_classes=num_classes)
         train_transform, eval_transform = build_transforms(model, args.image_size, args)
-        train_loader, val_loader = build_dataloaders(args, train_transform, eval_transform)
+        train_loader, val_loader = build_dataloaders(args, train_transform, eval_transform, device)
 
         model = model.to(device)
         total_params, trainable_params = count_parameters(model)
