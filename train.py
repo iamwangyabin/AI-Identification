@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
 from pathlib import Path
@@ -67,7 +66,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--warmup-epochs", type=float, default=1.0)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--align-dim", type=int, default=192)
@@ -344,18 +342,9 @@ def build_scheduler(
     optimizer: torch.optim.Optimizer,
     steps_per_epoch: int,
     epochs: int,
-    warmup_epochs: float,
-) -> torch.optim.lr_scheduler.LambdaLR:
+) -> torch.optim.lr_scheduler.CosineAnnealingLR:
     total_steps = max(steps_per_epoch * epochs, 1)
-    warmup_steps = int(steps_per_epoch * warmup_epochs)
-
-    def lr_lambda(step: int) -> float:
-        if warmup_steps > 0 and step < warmup_steps:
-            return float(step + 1) / float(warmup_steps)
-        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
 
 def save_checkpoint(state: dict[str, Any], output_dir: Path, filename: str) -> None:
@@ -367,7 +356,7 @@ def load_checkpoint(
     checkpoint_path: Path,
     model: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
-    scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
 ) -> tuple[int, float]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     model.load_state_dict(checkpoint["model"], strict=True)
@@ -393,7 +382,7 @@ def train_one_epoch(
     loader: DataLoader,
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LambdaLR,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
     scaler: torch.amp.GradScaler | None,
     device: torch.device,
     epoch: int,
@@ -577,7 +566,6 @@ def main() -> None:
             optimizer=optimizer,
             steps_per_epoch=len(train_loader),
             epochs=args.epochs,
-            warmup_epochs=args.warmup_epochs,
         )
         scaler = torch.amp.GradScaler("cuda") if args.amp and device.type == "cuda" else None
 
