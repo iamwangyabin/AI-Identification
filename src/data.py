@@ -15,7 +15,6 @@ class SampleRecord:
     path: str
     key: str
     label: int
-    class_name: str | None
 
 
 def build_path_substitutions(specs: Iterable[str]) -> list[tuple[str, str]]:
@@ -74,7 +73,6 @@ class JsonlImageDataset(Dataset[dict[str, object]]):
                             path=self._resolve_path(path),
                             key=record.get("key", Path(path).name),
                             label=int(record["label"]),
-                            class_name=record.get("class_name"),
                         )
                     )
         else:
@@ -91,7 +89,6 @@ class JsonlImageDataset(Dataset[dict[str, object]]):
                             path=self._resolve_path(path),
                             key=record.get("key", Path(path).name),
                             label=int(record["label"]),
-                            class_name=record.get("class_name"),
                         )
                     )
         return samples
@@ -109,5 +106,4 @@ class JsonlImageDataset(Dataset[dict[str, object]]):
             "label": sample.label,
             "key": sample.key,
             "path": sample.path,
-            "class_name": sample.class_name,
         }
