@@ -148,6 +148,7 @@ CSV 每行字段如下：
 - timm 1.0.26+
 - Pillow
 - numpy
+- tqdm
 - swanlab
 
 ### 查看参数
@@ -190,6 +191,8 @@ python3 train.py \
 - 每个 epoch 的 train/val loss、top1、top5
 - best top1
 - 模型总参数量与可训练参数量
+
+终端训练进度默认使用 `tqdm` 单行进度条展示，避免高频 `print` 把日志刷乱。
 
 推荐直接通过 `--data-root` 提供数据集根目录，清单里的 `path` 会自动拼接到该目录下。
 

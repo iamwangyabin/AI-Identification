@@ -5,7 +5,6 @@ import json
 import math
 import random
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ import torch.nn as nn
 from timm.data import create_transform, resolve_data_config
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from tqdm.auto import tqdm
 
 ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
@@ -384,6 +384,10 @@ def move_to_device(batch: dict[str, Any], device: torch.device) -> tuple[torch.T
     return images, labels
 
 
+def progress_write(message: str) -> None:
+    tqdm.write(message)
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -402,10 +406,16 @@ def train_one_epoch(
     total_top1 = 0.0
     total_top5 = 0.0
     total_samples = 0
-    start_time = time.time()
 
     autocast_enabled = args.amp and device.type == "cuda"
-    for step, batch in enumerate(loader, start=1):
+    progress_bar = tqdm(
+        loader,
+        total=len(loader),
+        desc=f"train {epoch}",
+        dynamic_ncols=True,
+        leave=False,
+    )
+    for step, batch in enumerate(progress_bar, start=1):
         global_step += 1
         images, labels = move_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
@@ -435,13 +445,18 @@ def train_one_epoch(
         total_top1 += top1.item() * batch_size / 100.0
         total_top5 += top5.item() * batch_size / 100.0
         total_samples += batch_size
+        avg_loss = total_loss / total_samples
+        avg_top1 = 100.0 * total_top1 / total_samples
+        avg_top5 = 100.0 * total_top5 / total_samples
+        lr = optimizer.param_groups[0]["lr"]
+        progress_bar.set_postfix(
+            loss=f"{avg_loss:.4f}",
+            top1=f"{avg_top1:.2f}",
+            top5=f"{avg_top5:.2f}",
+            lr=f"{lr:.6f}",
+        )
 
         if step % args.print_freq == 0 or step == len(loader):
-            elapsed = time.time() - start_time
-            avg_loss = total_loss / total_samples
-            avg_top1 = 100.0 * total_top1 / total_samples
-            avg_top5 = 100.0 * total_top5 / total_samples
-            lr = optimizer.param_groups[0]["lr"]
             logger.log(
                 {
                     "train/batch_loss": loss.item(),
@@ -455,11 +470,10 @@ def train_one_epoch(
                 },
                 step=global_step,
             )
-            print(
-                f"[train] epoch={epoch} step={step}/{len(loader)} "
-                f"loss={avg_loss:.4f} top1={avg_top1:.2f} top5={avg_top5:.2f} "
-                f"lr={lr:.6f} elapsed={elapsed:.1f}s"
-            )
+    progress_bar.close()
+    progress_write(
+        f"[train] epoch={epoch} loss={avg_loss:.4f} top1={avg_top1:.2f} top5={avg_top5:.2f} lr={lr:.6f}"
+    )
 
     return {
         "loss": total_loss / total_samples,
@@ -483,7 +497,14 @@ def evaluate(
     total_top5 = 0.0
     total_samples = 0
 
-    for batch in loader:
+    progress_bar = tqdm(
+        loader,
+        total=len(loader),
+        desc=split,
+        dynamic_ncols=True,
+        leave=False,
+    )
+    for batch in progress_bar:
         images, labels = move_to_device(batch, device)
         outputs = model(images)
         loss = criterion(outputs["logits"], labels)
@@ -494,13 +515,19 @@ def evaluate(
         total_top1 += top1.item() * batch_size / 100.0
         total_top5 += top5.item() * batch_size / 100.0
         total_samples += batch_size
+        progress_bar.set_postfix(
+            loss=f"{total_loss / total_samples:.4f}",
+            top1=f"{100.0 * total_top1 / total_samples:.2f}",
+            top5=f"{100.0 * total_top5 / total_samples:.2f}",
+        )
 
     metrics = {
         "loss": total_loss / total_samples,
         "top1": 100.0 * total_top1 / total_samples,
         "top5": 100.0 * total_top5 / total_samples,
     }
-    print(
+    progress_bar.close()
+    progress_write(
         f"[{split}] loss={metrics['loss']:.4f} top1={metrics['top1']:.2f} top5={metrics['top5']:.2f}"
     )
     return metrics
@@ -626,7 +653,7 @@ def main() -> None:
                 best_top1 = val_metrics["top1"]
                 checkpoint["best_top1"] = best_top1
                 save_checkpoint(checkpoint, args.output_dir, "best.pt")
-            print(f"Epoch {epoch} complete. best_top1={best_top1:.2f}")
+            progress_write(f"Epoch {epoch} complete. best_top1={best_top1:.2f}")
     finally:
         logger.finish()
 
